@@ -1,0 +1,320 @@
+---
+title: "Project 1: Global Baseline Predictors and RMSE"
+author: "Robert Gomez, DrPH, MPH"
+date: "June 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: readable
+---
+
+# [**Approach**]{.underline}
+
+In this assignment, I will build a Global Baseline Predictor recommender system. From a business perspective, this system recommends Nintendo Switch video games to players based on numeric ratings from other players. The goal is to start with very little information. First, I will use the raw average rating from the training data. Then, I will adjust that estimate by accounting for user bias and item bias. I will compare the models using RMSE for both the training and test data.
+
+# [**Base Code**]{.underline}
+
+## Loading packages
+
+```{r}
+# Load packages needed for data wrangling and table output.
+pacman::p_load(tidyverse,
+               knitr)
+
+# Format numeric table values to two decimal places.
+format_two_decimals <- function(table) {
+  table %>%
+    mutate(across(where(is.numeric), ~ format(round(.x, 2), nsmall = 2)))
+}
+```
+
+## Creating Rating Data
+
+The rating data include six users and six Nintendo Switch games. Ratings use a 1 to 5 scale. Missing values mean that the user has not rated the game.
+
+```{r}
+# Create a small user-item ratings matrix with missing values.
+ratings_original <- tribble(~user, ~`Mario Kart 8 Deluxe`, ~`Zelda: Breath of the Wild`, ~`Animal Crossing: New Horizons`, ~`Super Smash Bros. Ultimate`, ~`Super Mario Odyssey`, ~`Splatoon 3`,
+                            "Alicia", 5, 4, 5, 3, NA, 4,
+                            "Ben", 4, 5, 3, 5, 4, NA,
+                            "Carla", 5, NA, 4, 4, 5, 3,
+                            "Devon", 3, 5, NA, 5, 4, 2,
+                            "Elena", NA, 4, 5, 3, 5, 4,
+                            "Farah", 4, 3, 5, NA, 4, 5)
+
+# Print the original matrix so the missing values are visible.
+kable(ratings_original,
+      caption = "Original User-Item Ratings Matrix")
+
+```
+
+## Transforming Data and Creating Train-Test Split
+
+I transformed the data into long format and then selected one observed rating from each user for the test set. The remaining observed ratings were used for training.
+
+```{r}
+# Convert the user-item matrix into long format for easier calculations.
+ratings_long <- ratings_original %>%
+  pivot_longer(cols = -user,
+               names_to = "item",
+               values_to = "rating")
+
+# Select one observed rating from each user to hold out for testing.
+test_set <- tribble(
+  ~user,    ~item,
+  "Alicia", "Mario Kart 8 Deluxe",
+  "Ben",    "Zelda: Breath of the Wild",
+  "Carla",  "Super Mario Odyssey",
+  "Devon",  "Super Mario Odyssey",
+  "Elena",  "Animal Crossing: New Horizons",
+  "Farah",  "Animal Crossing: New Horizons"
+)
+
+# Flag each row as Training, Test, or Missing.
+ratings_split <- ratings_long %>%
+  left_join(test_set %>%
+              mutate(data_split = "Test"),
+            by = c("user", "item")) %>%
+  mutate(data_split = case_when(is.na(rating) ~ "Missing",
+                                data_split == "Test" ~ "Test",
+                                TRUE ~ "Training"))
+
+# Keep the observed training ratings for model fitting.
+training_data <- ratings_split %>%
+  filter(data_split == "Training")
+
+# Keep the held-out observed ratings for model testing.
+test_data <- ratings_split %>%
+  filter(data_split == "Test")
+
+# Print the observed ratings and their assigned data split.
+ratings_split %>%
+  filter(data_split != "Missing") %>%
+  arrange(user, item) %>%
+  kable(caption = "Training and Test Ratings")
+```
+
+## Creating Training User-Item Matrix and Average Table
+
+I created a user-item matrix, calculated the user averages, calculated the game averages, and then calculated each game's difference from the overall average. The test ratings are removed from this table because the model should only learn from the training data.
+
+```{r}
+# Recreate a user-item matrix using only the training ratings.
+training_matrix <- ratings_split %>%
+  mutate(training_rating = if_else(data_split == "Training", rating, NA_real_)) %>%
+  select(user, item, training_rating) %>%
+  pivot_wider(names_from = item,
+              values_from = training_rating)
+
+# Store the game columns so they can be reused in later calculations.
+game_columns <- c("Mario Kart 8 Deluxe", "Zelda: Breath of the Wild",
+                  "Animal Crossing: New Horizons", "Super Smash Bros. Ultimate",
+                  "Super Mario Odyssey", "Splatoon 3")
+
+# Calculate each user's average rating from the training data.
+training_table <- training_matrix %>%
+  mutate(user_avg = round(rowMeans(across(all_of(game_columns)), na.rm = TRUE), 2))
+
+# Calculate the overall average rating from the training matrix.
+overall_avg <- training_table %>%
+  select(all_of(game_columns)) %>%
+  as.matrix() %>%
+  mean(na.rm = TRUE) %>%
+  round(2)
+
+# Calculate each game's average rating from the training data.
+game_avg <- round(colMeans(select(training_table, all_of(game_columns)), na.rm = TRUE), 2) %>%
+  as_tibble_row()
+
+# Add the game average row.
+game_avg <- game_avg %>%
+  mutate(user = "Game Avg.",
+         user_avg = overall_avg) %>%
+  select(user, all_of(game_columns), user_avg)
+
+# Calculate how far each game average is from the overall average.
+game_avg_difference <- game_avg %>%
+  mutate(across(all_of(game_columns), ~ round(.x - overall_avg, 2)),
+         user = "Game Avg. Difference",
+         user_avg = overall_avg)
+
+# Combine the user ratings, game averages, and average differences into one table.
+final_training_table <- bind_rows(training_table, game_avg, game_avg_difference) %>%
+  mutate(user_avg_difference = user_avg - .env$overall_avg,
+         across(where(is.numeric), ~ round(.x, 2))) %>%
+  rename(User = user,
+         `User Avg.` = user_avg,
+         `User Avg. Difference` = user_avg_difference)
+
+# Print the training matrix and average differences.
+final_training_table %>%
+  format_two_decimals() %>%
+  kable(caption = "Training User-Item Matrix and Average Differences")
+```
+
+## Calculating Raw Average and RMSE
+
+The raw average model uses the same prediction for every user-item pair. This prediction is the overall mean rating from the training data.
+
+```{r}
+# Create an RMSE function to evaluate prediction error.
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+# Assign the overall average rating as the prediction for every user-game pair.
+raw_average_predictions <- ratings_long %>%
+  select(user, item, actual_rating = rating) %>%
+  mutate(raw_average_prediction = overall_avg) %>%
+  left_join(ratings_split %>% select(user, item, data_split),
+            by = c("user", "item"))
+
+# Print the raw average prediction table.
+raw_average_predictions %>%
+  select(user, item, actual_rating, data_split, raw_average_prediction) %>%
+  arrange(user, item) %>%
+  format_two_decimals() %>%
+  kable(caption = "Raw Average Predictions for User-Item Combinations")
+```
+
+```{r}
+# Calculate RMSE for the raw average model on the training data.
+raw_training_rmse <- round(rmse(training_data$rating, overall_avg), 2)
+
+# Calculate RMSE for the raw average model on the test data.
+raw_test_rmse <- round(rmse(test_data$rating, overall_avg), 2)
+
+# Create a summary table for the raw average results.
+raw_results <- tibble(
+  Model = "Raw Average",
+  Dataset = c("Training", "Test"),
+  RMSE = c(raw_training_rmse, raw_test_rmse)
+)
+
+# Print the raw average RMSE table.
+raw_results %>%
+  format_two_decimals() %>%
+  kable(caption = "Raw Average RMSE")
+```
+
+## Calculating User and Item Bias
+
+The next step is to calculate how much each user tends to rate above or below the overall average. After that, I calculate how much each game tends to rate above or below the average after accounting for user bias.
+
+```{r}
+# Calculate each user's average difference from the overall average.
+user_bias <- training_data %>%
+  group_by(user) %>%
+  summarize(user_avg_difference = round(mean(rating - overall_avg), 2),
+            .groups = "drop")
+
+# Calculate each game's average difference after accounting for user differences.
+item_bias <- training_data %>%
+  left_join(user_bias, by = "user") %>%
+  group_by(item) %>%
+  summarize(item_avg_difference = round(mean(rating - overall_avg - user_avg_difference), 2),
+            .groups = "drop")
+
+# Print the user average differences.
+user_bias %>%
+  format_two_decimals() %>%
+  kable(caption = "User Average Differences")
+
+# Print the game average differences.
+item_bias %>%
+  format_two_decimals() %>%
+  kable(caption = "Game Average Differences")
+```
+
+## Creating Baseline Predictors
+
+The baseline predictor is calculated by adding the raw average, the user average difference, and the game average difference.
+
+```{r}
+# Create baseline predictions for every user-game pair.
+baseline_predictions <- ratings_long %>%
+  select(user, item, actual_rating = rating) %>%
+  left_join(user_bias, by = "user") %>%
+  left_join(item_bias, by = "item") %>%
+  mutate(predicted_rating = round(overall_avg + user_avg_difference + item_avg_difference, 2),
+         predicted_rating = round(pmin(pmax(predicted_rating, 1), 5), 2)) %>%
+  left_join(ratings_split %>% select(user, item, data_split),
+            by = c("user", "item"))
+
+# Print the baseline predictor table.
+baseline_predictions %>%
+  select(user, item, actual_rating, data_split, predicted_rating) %>%
+  arrange(user, item) %>%
+  format_two_decimals() %>%
+  kable(caption = "Baseline Predictor Table")
+```
+
+## Calculating Baseline RMSE
+
+```{r}
+# Filter the baseline predictions to the training rows.
+baseline_training_data <- baseline_predictions %>%
+  filter(data_split == "Training")
+
+# Filter the baseline predictions to the test rows.
+baseline_test_data <- baseline_predictions %>%
+  filter(data_split == "Test")
+
+# Calculate RMSE for the baseline predictor on the training data.
+baseline_training_rmse <- round(rmse(baseline_training_data$actual_rating,
+                                     baseline_training_data$predicted_rating), 2)
+
+# Calculate RMSE for the baseline predictor on the test data.
+baseline_test_rmse <- round(rmse(baseline_test_data$actual_rating,
+                                 baseline_test_data$predicted_rating), 2)
+
+# Combine the raw average and baseline RMSE results.
+final_results <- bind_rows(
+  raw_results,
+  tibble(Model = "Baseline Predictor",
+         Dataset = c("Training", "Test"),
+         RMSE = c(baseline_training_rmse, baseline_test_rmse))
+)
+
+# Print the final RMSE comparison table.
+final_results %>%
+  format_two_decimals() %>%
+  kable(caption = "RMSE Comparison")
+```
+
+# [**Recommendation**]{.underline}
+
+## Predicting an Unrated Game
+
+How would Elena rate *Mario Kart 8 Deluxe*?
+
+```{r}
+# Estimate Elena's rating for Mario Kart 8 Deluxe.
+baseline_predictions %>%
+  filter(user == "Elena",
+         item == "Mario Kart 8 Deluxe") %>%
+  transmute(user,
+            item,
+            predicted_rating = round(predicted_rating, 2)) %>%
+  format_two_decimals() %>%
+  kable(caption = "Example Prediction")
+```
+
+Which missing game rating has the highest predicted value for each user?
+
+```{r}
+# Recommend the highest predicted missing game for each user.
+baseline_predictions %>%
+  filter(data_split == "Missing") %>%
+  group_by(user) %>%
+  slice_max(predicted_rating, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(user, item, predicted_rating) %>%
+  format_two_decimals() %>%
+  kable(caption = "Recommended Game for Each User")
+```
+
+# [**Summary**]{.underline}
+
+The raw average rating from the training data was `r sprintf("%.2f", overall_avg)`. This model is useful as a simple starting point because it gives one prediction for every user-item combination. The baseline predictor improved on the raw average model by adding user and game average differences. In this dataset, the baseline predictor had a lower RMSE for both the training and test data. This means that accounting for user bias and item bias gave better predictions than using the same average rating for every Nintendo Switch game. This is still a simple recommender system. It does not use game genres, platform behavior, play time, or similarities between users. However, it creates a clear baseline that more advanced recommender systems should improve on.
