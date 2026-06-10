@@ -394,6 +394,8 @@ Predictors</a></li>
 <li><a href="#predicting-an-unrated-game" id="toc-predicting-an-unrated-game">Predicting an Unrated Game</a></li>
 </ul></li>
 <li><a href="#summary" id="toc-summary"><u><strong>Summary</strong></u></a></li>
+<li><a href="#response-to-assignment-feedback" id="toc-response-to-assignment-feedback"><u><strong>Response to
+Assignment Feedback</strong></u></a></li>
 </ul>
 </div>
 
@@ -1822,6 +1824,100 @@ Nintendo Switch game. This is still a simple recommender system. It does
 not use game genres, platform behavior, play time, or similarities
 between users. However, it creates a clear baseline that more advanced
 recommender systems should improve on.</p>
+</div>
+<div id="response-to-assignment-feedback" class="section level1">
+<h1><u><strong>Response to Assignment Feedback</strong></u></h1>
+<p>Based on the feedback, I also calculated MAE as a second error
+metric. RMSE and MAE both measure prediction error, but they do it in
+different ways. RMSE squares the errors before averaging, which gives
+more weight to larger mistakes. MAE takes the absolute value of each
+error and calculates the average number of rating points that the
+prediction is off by.</p>
+<pre class="r"><code># Create an MAE function to calculate the average absolute prediction error.
+mae &lt;- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+# Calculate MAE for the raw average model on the training data.
+raw_training_mae &lt;- round(mae(training_data$rating, overall_avg), 2)
+
+# Calculate MAE for the raw average model on the test data.
+raw_test_mae &lt;- round(mae(test_data$rating, overall_avg), 2)
+
+# Calculate MAE for the baseline predictor on the training data.
+baseline_training_mae &lt;- round(mae(baseline_training_data$actual_rating,
+                                   baseline_training_data$predicted_rating), 2)
+
+# Calculate MAE for the baseline predictor on the test data.
+baseline_test_mae &lt;- round(mae(baseline_test_data$actual_rating,
+                               baseline_test_data$predicted_rating), 2)
+
+# Combine the RMSE and MAE results into one table.
+feedback_results &lt;- final_results %&gt;%
+  left_join(
+    tibble(Model = c(&quot;Raw Average&quot;, &quot;Raw Average&quot;,
+                     &quot;Baseline Predictor&quot;, &quot;Baseline Predictor&quot;),
+           Dataset = c(&quot;Training&quot;, &quot;Test&quot;, &quot;Training&quot;, &quot;Test&quot;),
+           MAE = c(raw_training_mae, raw_test_mae,
+                   baseline_training_mae, baseline_test_mae)),
+    by = c(&quot;Model&quot;, &quot;Dataset&quot;)
+  )
+
+# Print the RMSE and MAE comparison table.
+feedback_results %&gt;%
+  format_two_decimals() %&gt;%
+  kable(caption = &quot;RMSE and MAE Comparison&quot;)</code></pre>
+<table>
+<caption>RMSE and MAE Comparison</caption>
+<thead>
+<tr class="header">
+<th align="left">Model</th>
+<th align="left">Dataset</th>
+<th align="left">RMSE</th>
+<th align="left">MAE</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Raw Average</td>
+<td align="left">Training</td>
+<td align="left">0.84</td>
+<td align="left">0.64</td>
+</tr>
+<tr class="even">
+<td align="left">Raw Average</td>
+<td align="left">Test</td>
+<td align="left">0.95</td>
+<td align="left">0.87</td>
+</tr>
+<tr class="odd">
+<td align="left">Baseline Predictor</td>
+<td align="left">Training</td>
+<td align="left">0.81</td>
+<td align="left">0.67</td>
+</tr>
+<tr class="even">
+<td align="left">Baseline Predictor</td>
+<td align="left">Test</td>
+<td align="left">0.84</td>
+<td align="left">0.77</td>
+</tr>
+</tbody>
+</table>
+<p>The RMSE results show that the baseline predictor improved
+performance for both the training and test data. The raw average model
+had an RMSE of 0.84 for training and 0.95 for test, while the baseline
+predictor had an RMSE of 0.81 for training and 0.84 for test. This
+suggests that adjusting for user differences and game differences helped
+reduce larger prediction errors. The MAE results tell a slightly
+different story. The baseline predictor improved test MAE noticeably,
+dropping from 0.87 to 0.77, but training MAE went in the other
+direction, increasing from 0.64 to 0.67. As a result, it seems like the
+baseline model did not improve every error measure on the training data,
+but it did improve the test results. Overall, the main difference
+between the two metrics is that RMSE is more sensitive to larger
+prediction errors, while MAE is easier to read as the average
+rating-point mistake.</p>
 </div>
 
 
