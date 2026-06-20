@@ -1,0 +1,80 @@
+Research Discussion 4
+================
+Robert Gomez, DrPH, MPH
+June 2026
+
+- [Mitigating the Harm of Recommender
+  Systems](#mitigating-the-harm-of-recommender-systems)
+- [Sources](#sources)
+
+# Mitigating the Harm of Recommender Systems
+
+One of the biggest takeaways from these readings is that recommender
+systems are not just neutral tools that help people find content. They
+influence what people see, what communities join, and even what ideas
+they are exposed to. A recommendation may seem like a small suggestion,
+but after millions of recommendations across millions of users, those
+suggestions can shape what people believe is popular, trustworthy, or
+worth paying attention to. One point that really stood out to me from
+Diresta’s article is that the biggest problem is not that harmful
+content exists online. It is that many platforms optimize their
+recommender systems for engagement, clicks, watch time, or retention. If
+content keeps people engaged, the algorithm learns to recommend more of
+it, even if that content is misleading, inflammatory, or extreme. The
+recommender does not have to understand whether something is true or
+false. It only has to learn what keeps people engaged and clicking.
+
+- **Countering radicalization:**
+
+  - I do not think the answer is removing all controversial content or
+    expecting platforms to decide what is true in every situation.
+    However, I do think there is a difference between allowing content
+    to exist and actively recommending it. Platforms can allow users to
+    search for certain topics while choosing not to promote them through
+    recommendations such as “Up Next” or trending lists. I also think
+    recommenders should introduce more authoritative sources, context,
+    or different viewpoints instead of continually recommending more
+    extreme content. The goal should be to reduce the chances that
+    someone moves from simple curiosity to increasingly extreme
+    material.
+
+- **Preventing algorithmic discrimination:**
+
+  - The Krishnan et al. article made me think about another way bias can
+    enter recommender systems. Their study showed that simply displaying
+    an average rating influenced how people rated an item themselves.
+    Those influenced ratings can then become training data for future
+    recommendations, creating a feedback loop that reinforces majority
+    opinion instead of individual preferences. This also connects to a
+    broader issue. Recommender systems often assume that observed
+    behavior reflects true preferences, but that is not always the case.
+    People’s choices can also be influenced by social pressure, unequal
+    exposure, or the way a platform is designed. If certain creators,
+    products, jobs, or health resources are shown less often, users have
+    fewer opportunities to interact with them. The recommender may later
+    interpret those lower interaction rates as a lack of interest when
+    the real problem was a lack of opportunity. I think responsible
+    recommender systems could benefit from using a few important
+    guardrails such as:
+    - Evaluate recommendations based on fairness and potential harm, not
+      just engagement or prediction accuracy.
+    - Audit recommendation pathways to understand where users are being
+      led over time, not just whether individual pieces of content meet
+      policy.
+    - Recognize that interface features such as ratings, popularity
+      labels, and trending badges can influence user behavior and
+      eventually become biased training data.
+
+Overall, I think recommender systems can be incredibly useful, but they
+need to be designed responsibly. Companies should think beyond keeping
+users engaged and consider how their recommendations affect people and
+communities. To me, the better question is not, “What will keep people
+clicking?” but, “What should we responsibly help people find?”
+
+# Sources
+
+DiResta, R. (2018). *Up Next: A Better Recommendation System.* Wired.
+
+Krishnan, S., Patel, J., Franklin, M. J., & Goldberg, K. (n/a). *Social
+Influence Bias in Recommender Systems: A Methodology for Learning,
+Analyzing, and Mitigating Bias in Ratings.*
