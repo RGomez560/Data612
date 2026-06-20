@@ -1,0 +1,32 @@
+---
+title: "Research Discussion 3"
+author: "Robert Gomez, DrPH, MPH"
+date: "June 2026"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Recommender Systems and Bias
+
+I think recommender systems can absolutely reinforce human bias because they learn from human behavior. They are not starting with some perfectly neutral version of reality. Instead, they learn from clicks, ratings, purchases, searches, views, referrals, and other behaviors that already reflect people's decisions and the systems they interact with. I believe that is what makes building a good recommender system so challenging. A recommender system can appear accurate because it is driven by data, but the data itself may already reflect unequal access, stereotypes, popularity effects, or historical decisions. If the model simply learns those patterns, it can end up reinforcing them. One simple example is when a system assumes that people are not interested in something simply because they have not interacted with it. That may not be true. Instead, users may have interacted with an item less because they were never given the same opportunity to see it in the first place. In that case, the recommender is confusing lack of exposure with lack of preference.
+
+- **How bias can show up:**
+
+  - Reflecting on the recommendation techniques we have discussed in class helped me better understand how bias can show up in a recommender system. Collaborative filtering recommends items based on the preferences of similar users. That approach works well when historical behavior reflects true preferences, but it becomes a problem when the historical behavior is already biased. If the group of "similar users" reflects unequal opportunities or existing stereotypes, the recommender can continue recommending the same products, content, jobs, or services to the same groups of people, reinforcing those patterns over time. A real-world example that comes to mind is from health care. Obermeyer et al. (2019) studied a widely used algorithm that identified patients who might benefit from additional care management. The model used health care costs as a proxy for health needs, which seemed reasonable at first. However, cost is not the same as need. Many patients have significant health needs but lower medical spending because they face barriers such as limited access to care, inadequate insurance, or transportation challenges. As a result, the algorithm assigned lower risk scores to Black patients than White patients with similar health conditions. The model was not intentionally discriminatory, but it still produced discriminatory outcomes because it learned from historical spending patterns that reflected inequities in the health care system. To me, this is a perfect example of why recommender systems need to be evaluated beyond traditional performance measures. The model may have accurately predicted health care costs, but it was solving the wrong problem. If the goal is identifying patients who need additional care, then cost is simply not the right target.
+
+- **Reinforcing or preventing unethical targeting:**
+
+  - Based on the findings from the Obermeyer et al. (2019) article, I believe recommender systems are much more likely to reinforce bias unless they are intentionally designed to reduce it. Many organizations optimize their recommenders for engagement, retention, purchases, or cost savings. Those goals are understandable, but they are not enough by themselves. If a system only optimizes for those outcomes, it may also learn to target people in ways that are unfair or manipulative. At the same time, I do not think recommender systems are inherently bad. They can actually help reduce bias if fairness is built into the design. For example, a health care recommender could focus on identifying unmet health needs instead of simply predicting future spending. Developers could also evaluate whether patients with similar clinical needs receive similar recommendations regardless of race or other characteristics. This connects well with Hardt, Price, and Srebro's idea of equality of opportunity. A recommender system should not only be evaluated on whether it predicts well, but also on whether people who qualify for a beneficial recommendation have an equal opportunity to receive it.
+
+Overall, I think recommender systems are incredibly useful, but they need guardrails. One of the biggest risks is treating historical behavior as though it reflects true preferences or true need, when it often reflects unequal opportunity instead. That is especially important in health care, where a recommendation can influence whether someone receives additional care, outreach, education, or support. For that reason, accuracy alone is not enough. Responsible recommender systems should also be evaluated for fairness, proxy bias, and their real-world impact on the people they are intended to help.
+
+# Sources
+
+Hardt, M., Price, E., & Srebro, N. (2016). *Equality of Opportunity in Supervised Learning.*
+
+Obermeyer, Z., Powers, B., Vogeli, C., & Mullainathan, S. (2019). *Dissecting racial bias in an algorithm used to manage the health of populations.* *Science, 366*(6464), 447–453.
