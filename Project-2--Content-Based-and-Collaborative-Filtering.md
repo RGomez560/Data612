@@ -1,0 +1,1036 @@
+Project 2: Nutrition Recipe Recommender
+================
+Robert Gomez, DrPH, MPH
+June 2026
+
+- [Introduction](#introduction)
+- [Approach and Health Context](#approach-and-health-context)
+  - [Recommendation Methods](#recommendation-methods)
+  - [Similarity and Centering](#similarity-and-centering)
+  - [Evaluation](#evaluation)
+  - [Health Context](#health-context)
+- [Setup](#setup)
+  - [Packages and Helper Functions](#packages-and-helper-functions)
+  - [Loading Recipe Data](#loading-recipe-data)
+  - [Creating User-Recipe Rating
+    Data](#creating-user-recipe-rating-data)
+- [Data Preparation](#data-preparation)
+  - [Train-Test Split](#train-test-split)
+  - [Rating Matrix](#rating-matrix)
+- [Recommendation Models](#recommendation-models)
+  - [Model 1: Item-Item Collaborative
+    Filtering](#model-1-item-item-collaborative-filtering)
+  - [Model 2: Content-Based Filtering](#model-2-content-based-filtering)
+- [Evaluation](#evaluation-1)
+  - [Comparing RMSE and MAE](#comparing-rmse-and-mae)
+  - [Visualizing Model Performance](#visualizing-model-performance)
+  - [Neighborhood Size Sensitivity](#neighborhood-size-sensitivity)
+- [Recommendation](#recommendation)
+  - [Recommending Recipes for One
+    User](#recommending-recipes-for-one-user)
+- [Model Comparison](#model-comparison)
+- [Limitations and Next Steps](#limitations-and-next-steps)
+  - [Limitations:](#limitations)
+  - [Next Steps:](#next-steps)
+- [Summary](#summary)
+  - [References](#references)
+
+# Introduction
+
+In this assignment, I built and compared two recommendation algorithms
+for recipe recommendations using Food.com recipe data. Recipes are the
+items, and each includes nutrition information, ingredients, tags, and
+descriptions. The goal was to recommend recipes that fit a user’s
+preferences while comparing the performance of rating-based and
+content-based recommendation approaches.
+
+I compared two methods:
+
+- **Item-item collaborative filtering (CF)**, which recommends recipes
+  that are rated similarly by the same users.
+
+- **Content-based filtering**, which recommends recipes with similar
+  nutrition profiles, ingredients, tags, and descriptions.
+
+Both models are evaluated using Root Mean Square Error (RMSE) and Mean
+Absolute Error (MAE) across multiple neighborhood sizes. I included
+graphs comparing model performance and an example recommendation table
+for one user. Because I am interested in developing a nutrition
+recommender, I also discuss the health-related limitations of these
+approaches.
+
+# Approach and Health Context
+
+Recommendation systems predict which items a user may value. Chapter 9
+frames this problem using a utility matrix, where users are rows, items
+are columns, and known ratings are entries. Most user-item pairs are
+unknown, making the matrix highly sparse. The practical goal is not to
+fill every missing value but to identify a small set of items that are
+likely to be useful recommendations.
+
+## Recommendation Methods
+
+- Content-based filtering uses item attributes. In this project, a
+  recipe’s profile includes nutrition measures such as calories, sodium,
+  sugar, protein, fat, saturated fat, and carbohydrates, along with text
+  from the recipe name, category, description, and ingredients. Recipes
+  with similar profiles should receive similar recommendations. This
+  approach is particularly useful for nutrition-focused applications
+  because the recommendation features are directly related to the
+  characteristics of the recipe itself.
+
+- Collaborative filtering uses user-item interaction patterns. In this
+  project, item-item collaborative filtering compares recipes based on
+  how users rated them. If two recipes are rated similarly by the same
+  users, a user who liked one recipe may also like the other. This
+  approach depends on having sufficient user-recipe interaction history.
+  When ratings are sparse, similarity estimates become less reliable,
+  which can reduce recommendation quality.
+
+- User-user based collaborative filtering was not used for this project.
+
+## Similarity and Centering
+
+- Cosine similarity is used because it compares the direction of two
+  vectors rather than their magnitude. This is useful for sparse
+  recommender data because two recipes can be considered similar even if
+  they differ in overall rating volume. Pearson correlation is a common
+  alternative that centers user ratings before comparison, reducing the
+  influence of users who consistently rate items higher or lower than
+  average.
+
+- Rating normalization can be performed in different ways. Centering by
+  user mean adjusts for users who systematically rate items above or
+  below average, while centering by item mean adjusts for recipes that
+  tend to receive systematically higher or lower ratings. In this
+  project, ratings are centered by item mean before computing item-item
+  cosine similarity. This reduces the influence of item popularity and
+  is a natural choice when comparing similarities among recipes.
+
+- Cold start is a related challenge. When a new user has no rating
+  history, collaborative filtering cannot generate meaningful
+  recommendations because there are no interactions from which to
+  calculate similarity. Content-based filtering can better support new
+  users because recommendations are generated from recipe
+  characteristics rather than user behavior. In a production nutrition
+  recommender, cold start could be addressed by asking users about
+  dietary preferences, restrictions, or health goals during onboarding
+  and using those responses to seed initial recommendations.
+
+## Evaluation
+
+- RMSE and MAE are used because the project focuses on rating
+  prediction. RMSE places greater emphasis on larger prediction errors,
+  while MAE is easier to interpret as the average rating-point error.
+  Both metrics are compared against a global mean baseline to determine
+  whether either model improves on a simple average-rating prediction.
+  To evaluate sensitivity to neighborhood size, I tested k = 3, 5, and
+  10 neighbors for each model.
+
+## Health Context
+
+- For nutrition-focused recommendation systems, predictive accuracy
+  alone is not enough. A nutrition recommender should also consider
+  whether recommendations are safe, realistic, equitable,
+  understandable, and aligned with a user’s goals. For example, a user
+  may consistently rate high-sodium foods highly, but that does not
+  necessarily mean a nutrition recommender should reinforce those
+  preferences for someone managing hypertension. Although this project
+  does not provide medical advice, the health context remains important
+  because food recommendations can influence everyday dietary behavior
+  and health outcomes. The figure below can help illustrate what the
+  relationship looks like.
+
+![](images/clipboard-2548123405.png)
+
+# Setup
+
+## Packages and Helper Functions
+
+``` r
+# Load packages needed for data wrangling, modeling, and output.
+pacman::p_load(tidyverse,
+               knitr,
+               Matrix,
+               caret,
+               jsonlite,
+               ggplot2)
+
+# Format numeric table values to two decimal places.
+format_two_decimals <- function(table) {
+  table %>%
+    mutate(across(where(is.numeric), ~ format(round(.x, 2), nsmall = 2)))
+}
+
+# Calculate root mean squared error.
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+# Calculate mean absolute error.
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted), na.rm = TRUE)
+}
+
+# Clean list-like strings from recipe columns.
+clean_recipe_text <- function(x) {
+  x %>%
+    replace_na("") %>%
+    str_replace_all("c\\(|\\)|\"", " ") %>%
+    str_replace_all("[^A-Za-z0-9 ]", " ") %>%
+    str_squish() %>%
+    str_to_lower()
+}
+
+# Calculate cosine similarity between two numeric vectors.
+cosine_similarity <- function(x, y) {
+  denominator <- sqrt(sum(x^2, na.rm = TRUE)) * sqrt(sum(y^2, na.rm = TRUE))
+  if (denominator == 0) {
+    return(NA_real_)
+  }
+  sum(x * y, na.rm = TRUE) / denominator
+}
+```
+
+## Loading Recipe Data
+
+The recipe data and ratings come from the Food.com recipes and
+interactions dataset, available at
+[Kaggle](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions).
+The code checks the desktop path first, then the project folder, so the
+report can still run if the raw files are moved there later.
+
+``` r
+# Define local data paths. The desktop folder is used for this run.
+project_data_dir <- "data/food_com"
+desktop_data_dir <- "~/Desktop/Food.com Data"
+
+raw_recipes_path <- case_when(
+  file.exists(file.path(desktop_data_dir, "RAW_recipes.csv")) ~
+    file.path(desktop_data_dir, "RAW_recipes.csv"),
+  file.exists(file.path(project_data_dir, "RAW_recipes.csv")) ~
+    file.path(project_data_dir, "RAW_recipes.csv"),
+  TRUE ~ NA_character_
+)
+
+raw_interactions_path <- case_when(
+  file.exists(file.path(desktop_data_dir, "RAW_interactions.csv")) ~
+    file.path(desktop_data_dir, "RAW_interactions.csv"),
+  file.exists(file.path(project_data_dir, "RAW_interactions.csv")) ~
+    file.path(project_data_dir, "RAW_interactions.csv"),
+  TRUE ~ NA_character_
+)
+
+if (is.na(raw_recipes_path) || is.na(raw_interactions_path)) {
+  stop("RAW_recipes.csv and RAW_interactions.csv are required for this version of the project.")
+}
+
+# Mask the home directory in any displayed paths so the rendered report does not expose the local username.
+display_recipes_path <- sub(normalizePath("~"), "~", raw_recipes_path, fixed = TRUE)
+display_interactions_path <- sub(normalizePath("~"), "~", raw_interactions_path, fixed = TRUE)
+
+# Load recipe data and keep fields useful for content-based filtering.
+recipes_raw <- read_csv(raw_recipes_path,
+                        show_col_types = FALSE,
+                        col_select = c(name, id, minutes, tags, nutrition,
+                                       n_steps, description, ingredients,
+                                       n_ingredients))
+
+# Food.com stores nutrition as:
+# calories, fat %DV, sugar %DV, sodium %DV, protein %DV,
+# saturated fat %DV, and carbohydrates %DV.
+nutrition_values <- str_extract_all(recipes_raw$nutrition, "[0-9]+\\.?[0-9]*")
+
+recipes <- recipes_raw %>%
+  mutate(calories = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 1, .default = NA_character_))),
+         fat = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 2, .default = NA_character_))),
+         sugar = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 3, .default = NA_character_))),
+         sodium = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 4, .default = NA_character_))),
+         protein = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 5, .default = NA_character_))),
+         saturated_fat = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 6, .default = NA_character_))),
+         carbohydrate = map_dbl(nutrition_values, ~ as.numeric(pluck(.x, 7, .default = NA_character_)))) %>%
+  transmute(recipe_id = as.character(id),
+            recipe_name = name,
+            category = tags,
+            description = description,
+            ingredients = ingredients,
+            minutes = as.numeric(minutes),
+            n_steps = as.numeric(n_steps),
+            n_ingredients = as.numeric(n_ingredients),
+            calories,
+            fat,
+            saturated_fat,
+            sodium,
+            carbohydrate,
+            sugar,
+            protein) %>%
+  filter(!is.na(recipe_id),
+         !is.na(recipe_name)) %>%
+  mutate(recipe_text = str_c(recipe_name,
+                             category,
+                             description,
+                             ingredients,
+                             sep = " "),
+         recipe_text = clean_recipe_text(recipe_text))
+
+# Print the size of the recipe data.
+tibble(Metric = c("Recipe data source",
+                  "Recipes in data",
+                  "Recipes with nutrition values"),
+       Value = c(display_recipes_path,
+                 nrow(recipes),
+                 sum(complete.cases(recipes %>%
+                                      select(calories, fat, sodium, carbohydrate,
+                                             sugar, protein, saturated_fat))))) %>%
+  kable(caption = "Food.com Recipe data Summary")
+```
+
+| Metric                        | Value                                   |
+|:------------------------------|:----------------------------------------|
+| Recipe data source            | ~/Desktop/Food.com Data/RAW_recipes.csv |
+| Recipes in data               | 231636                                  |
+| Recipes with nutrition values | 231636                                  |
+
+Food.com Recipe data Summary
+
+## Creating User-Recipe Rating Data
+
+``` r
+# Use the original Food.com interactions file.
+interactions_source <- display_interactions_path
+
+interactions <- read_csv(raw_interactions_path,
+                         show_col_types = FALSE,
+                         col_select = c(user_id, recipe_id, rating)) %>%
+  transmute(user = as.character(user_id),
+            recipe_id = as.character(recipe_id),
+            rating = as.numeric(rating)) %>%
+  filter(!is.na(user),
+         !is.na(recipe_id),
+         !is.na(rating),
+         rating > 0) %>%
+  semi_join(recipes, by = "recipe_id")
+
+# Reduce very large interaction files to a dense, reproducible subset.
+set.seed(612)
+
+interaction_counts <- interactions %>%
+  count(user, name = "user_rating_count")
+
+recipe_counts <- interactions %>%
+  count(recipe_id, name = "recipe_rating_count")
+
+dense_interactions <- interactions %>%
+  left_join(interaction_counts, by = "user") %>%
+  left_join(recipe_counts, by = "recipe_id") %>%
+  filter(user_rating_count >= 5,
+         recipe_rating_count >= 5) %>%
+  group_by(user) %>%
+  filter(n() >= 5) %>%
+  ungroup()
+
+if (n_distinct(dense_interactions$user) > 200) {
+  selected_users <- dense_interactions %>%
+    count(user, sort = TRUE) %>%
+    slice_head(n = 200) %>%
+    pull(user)
+
+  dense_interactions <- dense_interactions %>%
+    filter(user %in% selected_users)
+}
+
+if (n_distinct(dense_interactions$recipe_id) > 250) {
+  selected_recipes <- dense_interactions %>%
+    count(recipe_id, sort = TRUE) %>%
+    slice_head(n = 250) %>%
+    pull(recipe_id)
+
+  dense_interactions <- dense_interactions %>%
+    filter(recipe_id %in% selected_recipes)
+}
+
+dense_interactions <- dense_interactions %>%
+  group_by(user) %>%
+  filter(n() >= 5) %>%
+  ungroup()
+
+ratings_long <- dense_interactions %>%
+  distinct(user, recipe_id, .keep_all = TRUE) %>%
+  inner_join(recipes, by = "recipe_id") %>%
+  select(user, recipe_id, recipe_name, rating,
+         calories, fat, sodium, carbohydrate, sugar, protein,
+         saturated_fat, minutes, n_ingredients,
+         recipe_text)
+
+# Print the rating data summary.
+tibble(Metric = c("Interaction source",
+                  "Users",
+                  "Recipes",
+                  "Observed ratings",
+                  "Average rating"),
+       Value = c(interactions_source,
+                 n_distinct(ratings_long$user),
+                 n_distinct(ratings_long$recipe_id),
+                 nrow(ratings_long),
+                 round(mean(ratings_long$rating), 2))) %>%
+  kable(caption = "User-Recipe Rating Data Summary")
+```
+
+| Metric             | Value                                        |
+|:-------------------|:---------------------------------------------|
+| Interaction source | ~/Desktop/Food.com Data/RAW_interactions.csv |
+| Users              | 200                                          |
+| Recipes            | 250                                          |
+| Observed ratings   | 6199                                         |
+| Average rating     | 4.8                                          |
+
+User-Recipe Rating Data Summary
+
+The Interaction source row is important for interpretation. In this
+updated version, the recommender is evaluated on observed Food.com user
+ratings rather than the earlier demonstration interaction sample. I
+still use a dense subset of the full file so the report can knit quickly
+and the rating matrix remains usable for a class project. The nutrition
+file stores calories directly. The other nutrition values, such as
+sodium, sugar, protein, fat, saturated fat, and carbohydrates, are
+stored as percent daily value fields in the Food.com raw data.
+
+# Data Preparation
+
+## Train-Test Split
+
+I selected one observed rating from each user for the test set. The
+remaining observed ratings were used for training. This matches the
+logic from Project 1 while using a larger recipe recommendation setting.
+
+``` r
+# Select one observed rating from each user to hold out for testing.
+test_set <- ratings_long %>%
+  group_by(user) %>%
+  slice_sample(n = 1) %>%
+  ungroup() %>%
+  select(user, recipe_id)
+
+# Flag each observed rating as Training or Test.
+ratings_split <- ratings_long %>%
+  left_join(test_set %>%
+              mutate(data_split = "Test"),
+            by = c("user", "recipe_id")) %>%
+  mutate(data_split = if_else(coalesce(data_split, "Training") == "Test",
+                              "Test",
+                              "Training"))
+
+training_data <- ratings_split %>%
+  filter(data_split == "Training")
+
+test_data <- ratings_split %>%
+  filter(data_split == "Test")
+
+# Print the split summary.
+ratings_split %>%
+  count(data_split, name = "ratings") %>%
+  kable(caption = "Training and Test Rating Counts")
+```
+
+| data_split | ratings |
+|:-----------|--------:|
+| Test       |     200 |
+| Training   |    5999 |
+
+Training and Test Rating Counts
+
+## Rating Matrix
+
+The rating matrix below is the utility matrix for this project. Users
+are rows, recipes are columns, and ratings are known entries. The blank
+entries are unrated recipes. The matrix sparsity value shows the share
+of user-recipe combinations that are unknown in the training data.
+
+``` r
+# Create a sparse user-recipe rating matrix from the training data.
+user_index <- training_data %>%
+  distinct(user) %>%
+  arrange(user) %>%
+  mutate(user_row = row_number())
+
+recipe_index <- training_data %>%
+  distinct(recipe_id) %>%
+  arrange(recipe_id) %>%
+  mutate(recipe_column = row_number())
+
+training_indexed <- training_data %>%
+  inner_join(user_index, by = "user") %>%
+  inner_join(recipe_index, by = "recipe_id")
+
+rating_matrix <- sparseMatrix(i = training_indexed$user_row,
+                              j = training_indexed$recipe_column,
+                              x = training_indexed$rating,
+                              dims = c(nrow(user_index), nrow(recipe_index)),
+                              dimnames = list(user_index$user,
+                                              recipe_index$recipe_id))
+
+# Print a compact matrix summary.
+tibble(Metric = c("Training users",
+                  "Training recipes",
+                  "Training ratings",
+                  "Matrix sparsity"),
+       Value = c(nrow(user_index),
+                 nrow(recipe_index),
+                 length(rating_matrix@x),
+                 round(1 - length(rating_matrix@x) /
+                         (nrow(rating_matrix) * ncol(rating_matrix)), 3))) %>%
+  kable(caption = "Training Rating Matrix Summary")
+```
+
+| Metric           |   Value |
+|:-----------------|--------:|
+| Training users   |  200.00 |
+| Training recipes |  250.00 |
+| Training ratings | 5999.00 |
+| Matrix sparsity  |    0.88 |
+
+Training Rating Matrix Summary
+
+# Recommendation Models
+
+## Model 1: Item-Item Collaborative Filtering
+
+For each test rating, I predicted the user rating from the k most
+similar recipes that the same user rated in the training data, using
+item-mean-centered cosine similarity as described in the Theory section.
+
+``` r
+# Convert sparse matrix to a dense matrix for the classroom-sized similarity step.
+rating_dense <- as.matrix(rating_matrix)
+
+# Calculate item-item cosine similarity using mean-centered ratings.
+rating_centered <- rating_dense
+rating_centered[rating_centered == 0] <- NA
+rating_centered <- sweep(rating_centered, 2, colMeans(rating_centered, na.rm = TRUE))
+rating_centered[is.na(rating_centered)] <- 0
+
+column_norms <- sqrt(colSums(rating_centered^2))
+safe_norms <- if_else(column_norms == 0, 1, column_norms)
+rating_normalized <- sweep(rating_centered, 2, safe_norms, "/")
+
+item_similarity <- t(rating_normalized) %*% rating_normalized
+item_similarity[is.na(item_similarity)] <- 0
+diag(item_similarity) <- 0
+
+# Predict with item-item collaborative filtering.
+predict_item_cf <- function(target_user, target_recipe, neighborhood_size = 5) {
+  if (!(target_user %in% rownames(rating_dense)) ||
+      !(target_recipe %in% colnames(rating_dense))) {
+    return(mean(training_data$rating, na.rm = TRUE))
+  }
+
+  user_ratings <- rating_dense[target_user, ]
+  rated_recipes <- names(user_ratings[user_ratings > 0])
+  similarities <- item_similarity[target_recipe, rated_recipes]
+
+  neighborhood <- tibble(recipe_id = rated_recipes,
+                         rating = as.numeric(user_ratings[rated_recipes]),
+                         similarity = as.numeric(similarities)) %>%
+    filter(similarity > 0) %>%
+    arrange(desc(similarity)) %>%
+    slice_head(n = neighborhood_size)
+
+  if (nrow(neighborhood) == 0 || sum(abs(neighborhood$similarity)) == 0) {
+    return(mean(training_data$rating, na.rm = TRUE))
+  }
+
+  weighted.mean(neighborhood$rating,
+                neighborhood$similarity,
+                na.rm = TRUE) %>%
+    pmin(5) %>%
+    pmax(1)
+}
+
+item_cf_predictions <- test_data %>%
+  mutate(predicted_rating = map2_dbl(user,
+                                     recipe_id,
+                                     predict_item_cf),
+         Model = "Item-Item CF") %>%
+  select(Model, user, recipe_id, recipe_name, actual_rating = rating,
+         predicted_rating)
+
+item_cf_predictions %>%
+  select(user, recipe_name, actual_rating, predicted_rating) %>%
+  slice_head(n = 25) %>%
+  format_two_decimals() %>%
+  kable(caption = "Item-Item Collaborative Filtering Test Predictions (k = 5, first 25 shown)")
+```
+
+| user | recipe_name | actual_rating | predicted_rating |
+|:---|:---|:---|:---|
+| 47559 | beef patties in onion gravy | 5.00 | 4.54 |
+| 173579 | beef patties in onion gravy | 5.00 | 4.62 |
+| 60992 | caesar pork chops | 5.00 | 5.00 |
+| 5060 | thai grilled chicken thighs | 5.00 | 4.82 |
+| 169430 | taco seasoning budget friendly seasoning for tacos burritos | 5.00 | 4.80 |
+| 324390 | taco seasoning budget friendly seasoning for tacos burritos | 5.00 | 4.80 |
+| 49304 | pan roasted broccoli | 5.00 | 5.00 |
+| 498271 | pan roasted broccoli | 5.00 | 4.84 |
+| 140132 | wholly guacamole | 5.00 | 4.81 |
+| 526666 | crumb coated potato halves | 4.00 | 5.00 |
+| 4439 | roasted brussels sprouts | 5.00 | 3.91 |
+| 222564 | my family s favorite sloppy joes pizza joes | 4.00 | 5.00 |
+| 169969 | my family s favorite sloppy joes pizza joes | 5.00 | 5.00 |
+| 452940 | broccoli with garlic herb butter | 4.00 | 4.82 |
+| 386585 | broccoli with garlic herb butter | 5.00 | 4.90 |
+| 37636 | our favourite lemon loaf | 4.00 | 3.99 |
+| 43083 | perfect basic white rice | 5.00 | 4.79 |
+| 143318 | spring mix with walnuts cranberries and goat cheese | 5.00 | 4.80 |
+| 422893 | greek potatoes oven roasted and delicious | 5.00 | 4.78 |
+| 96177 | greek potatoes oven roasted and delicious | 5.00 | 5.00 |
+| 68960 | crock pot whole chicken | 5.00 | 4.79 |
+| 481092 | crock pot whole chicken | 5.00 | 4.92 |
+| 844554 | crock pot whole chicken | 5.00 | 5.00 |
+| 209747 | simple fried egg sandwich | 5.00 | 4.50 |
+| 679953 | simple fried egg sandwich | 5.00 | 5.00 |
+
+Item-Item Collaborative Filtering Test Predictions (k = 5, first 25
+shown)
+
+## Model 2: Content-Based Filtering
+
+For each test rating, I predicted the rating from the k most similar
+recipes the same user rated in training, using the content feature
+vector described in the Theory section. Because recommendations come
+from recipe features rather than rating history, this model could still
+produce predictions when rating overlap was limited.
+
+``` r
+# Build recipe content features from nutrition values and common recipe words.
+recipe_features_base <- ratings_split %>%
+  distinct(recipe_id, recipe_name, calories, fat, sodium,
+           carbohydrate, sugar, protein, saturated_fat,
+           minutes, n_ingredients, recipe_text)
+
+top_terms <- recipe_features_base %>%
+  select(recipe_id, recipe_text) %>%
+  separate_rows(recipe_text, sep = " ") %>%
+  filter(str_length(recipe_text) >= 4,
+         !recipe_text %in% c("with", "from", "this", "that", "recipe",
+                             "recipes", "food", "dish", "make")) %>%
+  count(recipe_text, sort = TRUE) %>%
+  slice_head(n = 25) %>%
+  pull(recipe_text)
+
+term_features <- recipe_features_base %>%
+  select(recipe_id, recipe_text) %>%
+  mutate(recipe_text = str_c(" ", recipe_text, " ")) %>%
+  crossing(term = top_terms) %>%
+  mutate(value = as.numeric(str_detect(recipe_text,
+                                       str_c(" ", term, " ")))) %>%
+  select(recipe_id, term, value) %>%
+  pivot_wider(names_from = term,
+              values_from = value,
+              names_prefix = "term_",
+              values_fill = 0)
+
+nutrition_features <- recipe_features_base %>%
+  select(recipe_id, calories, fat, sodium, carbohydrate,
+         sugar, protein, saturated_fat, minutes, n_ingredients) %>%
+  mutate(across(-recipe_id, ~ replace_na(.x, median(.x, na.rm = TRUE)))) %>%
+  mutate(across(-recipe_id, ~ as.numeric(scale(.x))))
+
+recipe_features <- nutrition_features %>%
+  left_join(term_features, by = "recipe_id") %>%
+  arrange(recipe_id)
+
+feature_matrix <- recipe_features %>%
+  select(-recipe_id) %>%
+  as.matrix()
+
+rownames(feature_matrix) <- recipe_features$recipe_id
+
+# Print a compact feature matrix summary.
+tibble(Metric = c("Recipes represented",
+                  "Content features",
+                  "Content matrix sparsity"),
+       Value = c(nrow(feature_matrix),
+                 ncol(feature_matrix),
+                 round(mean(feature_matrix == 0), 3))) %>%
+  kable(caption = "Content Feature Matrix Summary")
+```
+
+| Metric                  |   Value |
+|:------------------------|--------:|
+| Recipes represented     | 250.000 |
+| Content features        |  34.000 |
+| Content matrix sparsity |   0.308 |
+
+Content Feature Matrix Summary
+
+``` r
+# Predict with content-based filtering.
+predict_content_based <- function(target_user, target_recipe, neighborhood_size = 5) {
+  if (!(target_recipe %in% rownames(feature_matrix))) {
+    return(mean(training_data$rating, na.rm = TRUE))
+  }
+
+  user_history <- training_data %>%
+    filter(user == target_user,
+           recipe_id %in% rownames(feature_matrix))
+
+  if (nrow(user_history) == 0) {
+    return(mean(training_data$rating, na.rm = TRUE))
+  }
+
+  similarities <- map_dbl(user_history$recipe_id,
+                          ~ cosine_similarity(feature_matrix[target_recipe, ],
+                                              feature_matrix[.x, ]))
+
+  neighborhood <- user_history %>%
+    mutate(similarity = similarities) %>%
+    filter(!is.na(similarity),
+           similarity > 0) %>%
+    arrange(desc(similarity)) %>%
+    slice_head(n = neighborhood_size)
+
+  if (nrow(neighborhood) == 0 || sum(abs(neighborhood$similarity)) == 0) {
+    return(mean(training_data$rating, na.rm = TRUE))
+  }
+
+  weighted.mean(neighborhood$rating,
+                neighborhood$similarity,
+                na.rm = TRUE) %>%
+    pmin(5) %>%
+    pmax(1)
+}
+
+content_predictions <- test_data %>%
+  mutate(predicted_rating = map2_dbl(user,
+                                     recipe_id,
+                                     predict_content_based),
+         Model = "Content-Based") %>%
+  select(Model, user, recipe_id, recipe_name, actual_rating = rating,
+         predicted_rating)
+
+content_predictions %>%
+  select(user, recipe_name, actual_rating, predicted_rating) %>%
+  slice_head(n = 25) %>%
+  format_two_decimals() %>%
+  kable(caption = "Content-Based Filtering Test Predictions (k = 5, first 25 shown)")
+```
+
+| user | recipe_name | actual_rating | predicted_rating |
+|:---|:---|:---|:---|
+| 47559 | beef patties in onion gravy | 5.00 | 4.58 |
+| 173579 | beef patties in onion gravy | 5.00 | 5.00 |
+| 60992 | caesar pork chops | 5.00 | 4.60 |
+| 5060 | thai grilled chicken thighs | 5.00 | 5.00 |
+| 169430 | taco seasoning budget friendly seasoning for tacos burritos | 5.00 | 4.80 |
+| 324390 | taco seasoning budget friendly seasoning for tacos burritos | 5.00 | 4.80 |
+| 49304 | pan roasted broccoli | 5.00 | 5.00 |
+| 498271 | pan roasted broccoli | 5.00 | 4.60 |
+| 140132 | wholly guacamole | 5.00 | 5.00 |
+| 526666 | crumb coated potato halves | 4.00 | 4.80 |
+| 4439 | roasted brussels sprouts | 5.00 | 4.77 |
+| 222564 | my family s favorite sloppy joes pizza joes | 4.00 | 4.57 |
+| 169969 | my family s favorite sloppy joes pizza joes | 5.00 | 4.81 |
+| 452940 | broccoli with garlic herb butter | 4.00 | 4.61 |
+| 386585 | broccoli with garlic herb butter | 5.00 | 4.59 |
+| 37636 | our favourite lemon loaf | 4.00 | 4.42 |
+| 43083 | perfect basic white rice | 5.00 | 4.80 |
+| 143318 | spring mix with walnuts cranberries and goat cheese | 5.00 | 5.00 |
+| 422893 | greek potatoes oven roasted and delicious | 5.00 | 4.79 |
+| 96177 | greek potatoes oven roasted and delicious | 5.00 | 4.42 |
+| 68960 | crock pot whole chicken | 5.00 | 4.73 |
+| 481092 | crock pot whole chicken | 5.00 | 4.22 |
+| 844554 | crock pot whole chicken | 5.00 | 4.69 |
+| 209747 | simple fried egg sandwich | 5.00 | 4.79 |
+| 679953 | simple fried egg sandwich | 5.00 | 5.00 |
+
+Content-Based Filtering Test Predictions (k = 5, first 25 shown)
+
+# Evaluation
+
+## Comparing RMSE and MAE
+
+A global mean baseline always predicts the average training rating
+regardless of the user or recipe. It serves as a floor: any model that
+does not beat the baseline is no more useful than guessing the mean.
+Both models are compared against it here.
+
+``` r
+# Global mean baseline: always predict the training average.
+global_mean <- mean(training_data$rating, na.rm = TRUE)
+
+baseline_predictions <- test_data %>%
+  mutate(predicted_rating = global_mean,
+         Model = "Global Mean Baseline") %>%
+  select(Model, user, recipe_id, recipe_name, actual_rating = rating,
+         predicted_rating)
+
+# Combine all prediction tables.
+all_predictions <- bind_rows(baseline_predictions,
+                             item_cf_predictions,
+                             content_predictions)
+
+# Calculate model performance and order models for display.
+model_order <- c("Global Mean Baseline", "Item-Item CF", "Content-Based")
+
+model_results <- all_predictions %>%
+  group_by(Model) %>%
+  summarize(RMSE = rmse(actual_rating, predicted_rating),
+            MAE = mae(actual_rating, predicted_rating),
+            .groups = "drop") %>%
+  mutate(Model = factor(Model, levels = model_order)) %>%
+  arrange(Model)
+
+model_results %>%
+  format_two_decimals() %>%
+  kable(caption = "RMSE and MAE Model Comparison (k = 5)")
+```
+
+| Model                | RMSE | MAE  |
+|:---------------------|:-----|:-----|
+| Global Mean Baseline | 0.47 | 0.31 |
+| Item-Item CF         | 0.46 | 0.26 |
+| Content-Based        | 0.45 | 0.26 |
+
+RMSE and MAE Model Comparison (k = 5)
+
+As described in the Theory section, RMSE penalizes larger errors more
+strongly and MAE gives the average rating-point error; lower is better
+for both. Both metrics evaluate rating prediction, which is one of two
+distinct recommender evaluation tasks. This project focused on rating
+prediction because explicit test-set star ratings are available in the
+Food.com data and the prediction task is well-defined. These are useful
+checks, but they do not capture the health and equity dimensions
+discussed in the Limitations section.
+
+## Visualizing Model Performance
+
+``` r
+# Bar chart comparing RMSE and MAE for all three models.
+model_results %>%
+  mutate(Model = factor(Model, levels = model_order)) %>%
+  pivot_longer(cols = c(RMSE, MAE),
+               names_to = "Metric",
+               values_to = "Error") %>%
+  ggplot(aes(x = Model, y = Error, fill = Metric)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.65) +
+  labs(title = "Recipe Recommendation Error by Algorithm",
+       subtitle = "Lower is better; Global Mean Baseline is the reference floor",
+       x = NULL,
+       y = "Prediction Error",
+       fill = "Metric") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+![](Project-2--Content-Based-and-Collaborative-Filtering_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
+
+## Neighborhood Size Sensitivity
+
+I tested k = 3, 5, and 10 for both item-item collaborative filtering and
+content-based filtering. A larger neighborhood averages over more
+similar items, which can reduce variance but may also dilute the signal
+from the closest matches.
+
+``` r
+# Test k = 3, 5, 10 for each model.
+k_values <- c(3, 5, 10)
+
+k_sensitivity_long <- map_dfr(k_values, function(k) {
+  cf_preds <- test_data %>%
+    mutate(pred = map2_dbl(user, recipe_id,
+                           ~ predict_item_cf(.x, .y, neighborhood_size = k)))
+
+  cb_preds <- test_data %>%
+    mutate(pred = map2_dbl(user, recipe_id,
+                           ~ predict_content_based(.x, .y, neighborhood_size = k)))
+
+  bind_rows(
+    tibble(k = k,
+           Model = "Item-Item CF",
+           RMSE = rmse(cf_preds$rating, cf_preds$pred),
+           MAE  = mae(cf_preds$rating, cf_preds$pred)),
+    tibble(k = k,
+           Model = "Content-Based",
+           RMSE = rmse(cb_preds$rating, cb_preds$pred),
+           MAE  = mae(cb_preds$rating, cb_preds$pred))
+  )
+})
+
+k_sensitivity_long %>%
+  mutate(Model = factor(Model, levels = c("Item-Item CF", "Content-Based"))) %>%
+  arrange(Model, k) %>%
+  mutate(RMSE = round(RMSE, 2), MAE = round(MAE, 2)) %>%
+  kable(caption = "Prediction Error by Neighborhood Size (k)")
+```
+
+|   k | Model         | RMSE |  MAE |
+|----:|:--------------|-----:|-----:|
+|   3 | Item-Item CF  | 0.47 | 0.24 |
+|   5 | Item-Item CF  | 0.46 | 0.26 |
+|  10 | Item-Item CF  | 0.45 | 0.26 |
+|   3 | Content-Based | 0.48 | 0.25 |
+|   5 | Content-Based | 0.45 | 0.26 |
+|  10 | Content-Based | 0.46 | 0.26 |
+
+Prediction Error by Neighborhood Size (k)
+
+``` r
+# Line plot of RMSE and MAE by neighborhood size for each model.
+k_sensitivity_long %>%
+  pivot_longer(cols = c(RMSE, MAE),
+               names_to = "Metric",
+               values_to = "Error") %>%
+  ggplot(aes(x = k, y = Error, color = Model, group = Model)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ Metric, scales = "free_y") +
+  scale_x_continuous(breaks = k_values) +
+  labs(title = "Prediction Error by Neighborhood Size",
+       subtitle = "Smaller error is better",
+       x = "Neighborhood Size (k)",
+       y = "Error",
+       color = "Model") +
+  theme_minimal()
+```
+
+![](Project-2--Content-Based-and-Collaborative-Filtering_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
+
+# Recommendation
+
+## Recommending Recipes for One User
+
+The table below shows recommended recipes that the example user had not
+rated yet. The ranking used the content-based model because, as
+discussed in the cold start section above, it can generate
+recommendations even when recipe rating overlap is limited.
+
+``` r
+# Choose an example user with the most ratings.
+example_user <- ratings_split %>%
+  count(user, sort = TRUE) %>%
+  slice_head(n = 1) %>%
+  pull(user)
+
+# Find candidate recipes not already rated by the example user.
+user_rated_recipes <- ratings_split %>%
+  filter(user == example_user) %>%
+  pull(recipe_id)
+
+candidate_recipes <- ratings_split %>%
+  distinct(recipe_id, recipe_name, calories, sodium, sugar,
+           protein, saturated_fat, minutes) %>%
+  filter(!recipe_id %in% user_rated_recipes)
+
+# Generate recommendations using the content-based model.
+recommendations <- candidate_recipes %>%
+  mutate(user = example_user,
+         predicted_rating = map2_dbl(user,
+                                     recipe_id,
+                                     predict_content_based)) %>%
+  arrange(desc(predicted_rating)) %>%
+  slice_head(n = 5) %>%
+  select(user, recipe_name, predicted_rating,
+         calories, sodium, sugar, protein, saturated_fat, minutes)
+
+recommendations %>%
+  format_two_decimals() %>%
+  kable(caption = str_c("Recommended Recipes for User ", example_user))
+```
+
+| user | recipe_name | predicted_rating | calories | sodium | sugar | protein | saturated_fat | minutes |
+|:---|:---|:---|:---|:---|:---|:---|:---|:---|
+| 140132 | huevos a la mexicana | 5.00 | 271.60 | 8.00 | 10.00 | 26.00 | 38.00 | 15.00 |
+| 140132 | chicken in balsamic barbecue sauce | 5.00 | 498.00 | 37.00 | 63.00 | 82.00 | 32.00 | 50.00 |
+| 140132 | potatoes a l alsacienne | 5.00 | 439.90 | 14.00 | 11.00 | 16.00 | 59.00 | 45.00 |
+| 140132 | lemon chive rice | 5.00 | 313.40 | 18.00 | 4.00 | 14.00 | 7.00 | 40.00 |
+| 140132 | sunny side up special | 5.00 | 329.80 | 22.00 | 5.00 | 38.00 | 39.00 | 10.00 |
+
+Recommended Recipes for User 140132
+
+This table is a qualitative validation check. The predicted rating gives
+the recommender score, while the nutrition columns help review whether
+the recommended recipes look reasonable from a health perspective.
+Calories and minutes are direct values; sodium, sugar, protein, and
+saturated fat are percent daily value fields from the raw Food.com data.
+As discussed in the Limitations section, a production system would need
+stronger safeguards before deployment.
+
+# Model Comparison
+
+As described in the Theory section, content-based filtering is stronger
+when recipe data are informative and when rating history is limited,
+while item-item collaborative filtering can surface patterns not visible
+in recipe content but requires sufficient rating overlap to estimate
+similarity reliably. For this nutrition setting, a hybrid approach would
+likely be strongest. Content features can represent health-relevant
+recipe properties, while collaborative ratings can capture user taste
+preferences. A practical system would also need explicit constraints for
+allergies, sodium, sugar, dietary patterns, preparation time, food
+access, and user goals.
+
+# Limitations and Next Steps
+
+## Limitations:
+
+- The largest limitation is that I use a dense subset of the full
+  Food.com interaction data so the report can knit quickly. The results
+  could change if every user and every recipe were included or if a
+  different train/test split were used.
+
+- Equity and feasibility are first-class design concerns for nutrition
+  recommenders, not afterthoughts (Trattner & Elsweiler, 2017; Figueroa
+  et al., 2025). A system that recommends fresh produce, costly
+  ingredients, or meals with long preparation times assumes that users
+  have stable food access, adequate time, and purchasing power. Training
+  data from a platform like Food.com may also overrepresent certain
+  cuisines and dietary traditions, which can bias recommendations toward
+  already-represented preferences. A more equitable system would
+  evaluate recommendation quality across demographic and income groups,
+  allow users to set hard constraints on cost and preparation time, and
+  avoid treating high ratings or engagement alone as proxies for a
+  nutritionally sound or feasible meal.
+
+## Next Steps:
+
+- The content-based model uses simple nutrition values and common word
+  indicators. This is transparent, but it does not fully understand
+  synonyms, word order, cooking method, cuisine, or deeper semantic
+  meaning. Potential technical improvements include the use of Natural
+  Langauge Processing (NLP) appraches and a hybrid recommender.
+
+- The health-related next steps are just as important as the technical
+  ones. A stronger nutrition recommender should allow users to set
+  dietary restrictions, allergies, budget limits, preparation-time
+  limits, cultural preferences, and health goals. It should also explain
+  why a recipe is recommended, protect user privacy, and avoid implying
+  medical guidance when the system is only recommending recipes.
+
+# Summary
+
+This project compared item-item collaborative filtering with
+content-based filtering for nutrition-focused recipe recommendations,
+using a global mean baseline as the reference floor for both models. The
+neighborhood size sensitivity analysis showed how prediction error
+changed across k = 3, 5, and 10. As discussed in the Theory and Model
+Comparison sections, collaborative filtering is more useful when users
+share substantial rating overlap, while content-based filtering is
+stronger when recipe data are informative and rating history is limited.
+For a health-oriented nutrition recommender, I would start with
+content-based filtering because it can directly incorporate nutrition
+features and handle new users, then add collaborative filtering as
+rating history grows. As the Limitations section describes, technical
+accuracy is necessary but not sufficient for responsible deployment in a
+nutrition context. What is likely more critical is the collection of
+more data that allows the system to consider items like dietary
+restrictions, budget limits, and cultural preferences.
+
+## References
+
+Figueroa, C. A., Torkamaan, H., Bhattacharjee, A., Hauptmann, H., Guan,
+K. W., & Sedrakyan, G. (2025). Designing health recommender systems to
+promote health equity: A socioecological perspective. *Journal of
+Medical Internet Research*, 27, e60138. <https://doi.org/10.2196/60138>
+
+Trattner, C., & Elsweiler, D. (2017). *Food recommender systems:
+Important contributions, challenges and future research directions*.
+<https://arxiv.org/abs/1711.02760>
