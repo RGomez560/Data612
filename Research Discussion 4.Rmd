@@ -3,9 +3,9 @@ title: "Research Discussion 4"
 author: "Robert Gomez, DrPH, MPH"
 date: "June 2026"
 output:
-  github_document:
-    toc: true
   html_document:
+    toc: true
+  github_document:
     toc: true
 ---
 
