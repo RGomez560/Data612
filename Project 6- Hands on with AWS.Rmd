@@ -1,0 +1,133 @@
+---
+title: "Project 6: Hands on with AWS"
+author: "Robert Gomez, DrPH, MPH"
+date: "July 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: readable
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+project_assets <- "Project 6 - AWS Recommender"
+evidence_dir <- file.path(project_assets, "evidence", "screenshots")
+```
+
+# Introduction
+
+For this project, I moved part of my Food.com recipe Project 4 recommender into Amazon Web Services (AWS). The earlier projects handled model training and evaluation. Here, I focused on serving a small set of precomputed recommendations from the cloud.
+
+I built the deployment with three main AWS components:
+
+- **Amazon S3** stored the recommendation file.
+- **AWS Lambda** read the file and returned recommendations.
+- **Amazon VPC** provided the private network path between Lambda and S3.
+
+I created the resources with AWS CloudFormation and deployed them in the us-west-2 region. The final stack reached CREATE_COMPLETE on July 14, 2026.
+
+# AWS Architecture
+
+The application used a simple request path. An authenticated request invoked Lambda. Lambda then read a compact JSON recommendation file from a private S3 bucket and returned a ranked list of recipes.
+
+```{r deployment-evidence, out.width='100%', fig.cap='Live deployment status and the AWS serving architecture.'}
+knitr::include_graphics(file.path(evidence_dir, "01-aws-evidence.png"))
+```
+
+I kept training separate from serving. Training a recommender requires the full ratings data, model fitting, and evaluation. Serving only needs to return a result for one user. I therefore stored previously calculated top-N lists instead of rebuilding the model during every request. CloudFormation defined the S3 bucket, Lambda function, VPC, two private subnets, route table, S3 gateway endpoint, IAM role, security group, and CloudWatch log group. This made the setup repeatable and easier to review.
+
+# Long-Term Storage: Amazon S3
+
+Amazon S3 is object storage. It is designed to store files as objects inside buckets and retrieve them by key. I used S3 because the application only needed to read one compact JSON file. It did not need database joins, row updates, or transactions.
+
+```{r storage-evidence, out.width='100%', fig.cap='Verified S3 public-access protections, encryption, and artifact scope.'}
+knitr::include_graphics(file.path(evidence_dir, "02-aws-evidence.png"))
+```
+
+I configured the bucket to be private, encrypted, and versioned. The live checks confirmed that all four S3 Block Public Access settings were enabled. Default encryption used AES-256 with S3-managed keys. The bucket stored the precomputed recommendation artifact, not the raw Food.com ratings data. S3 was a better fit than Amazon RDS for this small serving task. RDS is a relational database and is useful when an application needs SQL queries, relationships between tables, or frequent record updates. Those features were not needed here. If the application later collected user profiles or feedback events, a database could become more useful.
+
+# Compute and Private Networking
+
+AWS Lambda is serverless compute. It runs code when an event or request occurs, so there is no virtual machine to keep running. I used a Python 3.12 Lambda function with 128 MB of memory and a 10-second timeout.
+
+```{r compute-network-evidence, out.width='100%', fig.cap='Verified Lambda configuration and the private VPC path to S3.'}
+knitr::include_graphics(file.path(evidence_dir, "03-aws-evidence.png"))
+```
+
+I attached Lambda to two private subnets in the project VPC. The subnets did not have a public internet route. Lambda reached S3 through an S3 gateway endpoint, which was verified as available. IAM, the endpoint policy, and the bucket policy limited the function to the approved artifact path. Amazon EC2 provides virtual servers with control over the operating system and installed software. EC2 can be a good choice for long-running services, custom environments, or workloads that need more control. I did not use EC2 because this request was small and event-driven. Keeping a server running would have added patching, configuration, and idle cost.
+
+# Live Verification Results
+
+I tested both the working application path and a blocked path. The live Lambda request returned StatusCode 200 and five diversity-reranked recipes for demonstration user 140132.
+
+```{r result-evidence, out.width='100%', fig.cap='Successful recommendation response and the expected denial of direct S3 access.'}
+knitr::include_graphics(file.path(evidence_dir, "04-aws-evidence.png"))
+```
+
+I then tried to read the S3 object directly from outside the approved VPC endpoint. AWS returned AccessDenied, which was the expected result. Together, the two checks showed that the application path worked while the unapproved direct path was blocked.
+
+# Why I Chose This Solution
+
+## S3 for Storage
+
+I chose S3 because the serving data was a small, precomputed file. S3 provides durable storage, encryption, versioning, and low operational overhead. The tradeoff is that object storage is not designed for relational queries or frequent partial updates.
+
+## Lambda for Compute
+
+I chose Lambda because the function only needed to validate a request, read an S3 object, and return a short response. Lambda avoids server management and can scale by running more function instances. Its limits include cold starts, execution time limits, and deployment-package limits. It would not be a good place to train the full recommender model.
+
+## A Private VPC Path
+
+I used two private subnets and an S3 gateway endpoint so the artifact read did not require a public internet route or a NAT gateway. A VPC does not make a bucket private by itself, so I also used S3 Block Public Access, IAM permissions, encryption, an endpoint policy, and a bucket policy.
+
+# Security and Privacy Controls
+
+The deployment used several layers of protection:
+
+- S3 Block Public Access prevented public bucket access.
+- AES-256 default encryption protected stored objects.
+- A TLS-only bucket policy required encrypted network connections.
+- IAM limited Lambda to the required S3 object.
+- The endpoint and bucket policies restricted the approved data path.
+- The private subnets had no public internet route.
+- The artifact used a pseudonymous user ID and excluded raw ratings.
+
+These controls reduced risk, but they did not make the project a production system. A real application would also need user authentication, monitoring, audit logs, retention rules, incident response, and a process for deleting user data.
+
+# Recommender Scope
+
+The Lambda function served recommendations that had already been produced in Project 4. It did not train a new model or improve model accuracy. The artifact included an accuracy-ranked list and a diversity-reranked list for one demonstration user. This separation kept the cloud deployment small and clear. Model training remains a batch task because it uses many ratings and performs expensive calculations. Online serving should be fast and should not repeat the full training process for every request. Food.com ratings describe user preference. They do not show that a recipe is medically appropriate, safe for allergies, affordable, or suitable for a person's dietary needs. The response therefore included a nutrition-use disclaimer.
+
+# Advantages and Disadvantages
+
+| Choice | Main advantage | Main limitation |
+|---|---|---|
+| Amazon S3 | Simple, durable storage for one recommendation file | No relational queries or frequent partial updates |
+| AWS Lambda | No server management for a small request-based function | Cold starts and runtime/package limits |
+| Precomputed top-N lists | Fast lookup and clear separation from training | Recommendations can become stale |
+| Private VPC and S3 endpoint | Private service path without a NAT gateway | More network and policy configuration |
+| CloudFormation | Repeatable deployment and cleanup | Requires permission to create several AWS resources |
+
+# Summary
+
+I deployed a small part of my recipe recommender on AWS. S3 stored the precomputed recommendation file, Lambda served the results, and a private VPC path connected Lambda to S3. CloudFormation created the resources, and the live stack reached CREATE_COMPLETE. The final tests showed that the approved application path worked and that direct access outside the S3 endpoint was denied. The project demonstrated cloud storage, compute, private networking, and layered security without turning the deployment into a full production system.
+
+# Sources
+
+Amazon Web Services. *Giving Lambda functions access to resources in an Amazon VPC.* <https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html>
+
+Amazon Web Services. *Gateway endpoints.* <https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html>
+
+Amazon Web Services. *Blocking public access to Amazon S3 storage.* <https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html>
+
+Amazon Web Services. *Security best practices for Amazon S3.* <https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html>
+
+Amazon Web Services. *AWS::EC2::VPCEndpoint.* <https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ec2-vpcendpoint.html>
+
+Li, S. *Food.com Recipes and Interactions.* Kaggle. <https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions>
+
+Koren, Y., Bell, R., & Volinsky, C. (2009). Matrix factorization techniques for recommender systems. *Computer, 42*(8), 30–37. <https://datajobs.com/data-science-repo/Recommender-Systems-%5BNetflix%5D.pdf>
